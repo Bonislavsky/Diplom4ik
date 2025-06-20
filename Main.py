@@ -199,25 +199,29 @@ class RobotApp(ctk.CTk):
         
         self.add_log(f"Отримана команда: {command}")
         
-        # Паттерн для сбора ближайших n товаров
-        pattern_nearest = r"собери\s+найближчi?\s+(\d+)\s+товари"
-        match_nearest = re.search(pattern_nearest, command)
+        # Проверяем есть ли цифра в команде
+        has_digit = any(char.isdigit() for char in command)
         
-        if match_nearest:
-            n = int(match_nearest.group(1))
-            self.collect_nearest_items(n)
-            self.command_entry.delete(0, tk.END)
-            return
+        # Если в тексте есть число - выполняем сбор ближайших товаров
+        if has_digit:
+            # Паттерн для сбора ближайших n товаров
+            pattern_nearest = r"(\d+)"
+            match_nearest = re.search(pattern_nearest, command)
+            if match_nearest:
+                n = int(match_nearest.group(1))
+                self.collect_nearest_items(n)
+                self.command_entry.delete(0, tk.END)
+                return
         
-        # Паттерн для сбора всех товаров
-        if "собери всi товари" in command or "собери всі товари" in command:
-            self.collect_all_items()
-            self.command_entry.delete(0, tk.END)
-            return
-        
-        # Паттерн для создания txt файла с логами
-        if "создай txt файл с логами" in command or "створи txt файл з логами" in command:
+        # Если в тексте есть слово "txt" - создаем файл с логами
+        if "txt" in command:
             self.create_log_file()
+            self.command_entry.delete(0, tk.END)
+            return
+        
+        # Если в сообщении нет слова "txt" и нет цифр - собираем все товары
+        if "txt" not in command and not has_digit:
+            self.collect_all_items()
             self.command_entry.delete(0, tk.END)
             return
         
@@ -225,9 +229,9 @@ class RobotApp(ctk.CTk):
         messagebox.showwarning("Помилка", 
             "Команда не розпізнана!\n\n"
             "Доступні команди:\n"
-            "• собери ближайшие N товаров\n"
-            "• собери все товары\n"
-            "• создай txt файл с логами")
+            "• команда с числом - собери ближайшие N товаров\n"
+            "• команда без txt и цифр - собери все товары\n"
+            "• команда с txt - создай txt файл с логами")
 
     def collect_nearest_items(self, n):
         """Сбор n ближайших предметов от текущей позиции робота"""
