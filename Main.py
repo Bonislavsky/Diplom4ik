@@ -6,6 +6,8 @@ import math
 import random
 from datetime import datetime
 from collections import deque
+import os
+import re
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -66,7 +68,8 @@ class RobotApp(ctk.CTk):
             
             self.items[item_id] = {
                 "color": item_color,
-                "pos": item_pos
+                "pos": item_pos,
+                "delivered": False  # Флаг доставки
             }
 
     def generate_fixed_shelves(self):
@@ -94,6 +97,7 @@ class RobotApp(ctk.CTk):
         self.left_frame.grid_columnconfigure(0, weight=1)
         self.left_frame.grid_rowconfigure(0, weight=3)
         self.left_frame.grid_rowconfigure(1, weight=1)
+        self.left_frame.grid_rowconfigure(2, weight=0)  # Новая строка для команд
 
         self.log_frame = ctk.CTkFrame(self.left_frame)
         self.log_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
@@ -138,6 +142,33 @@ class RobotApp(ctk.CTk):
         )
         self.extra_btn.pack(padx=10, pady=10)
 
+        # Новая секция для текстовых команд
+        self.commands_frame = ctk.CTkFrame(self.left_frame)
+        self.commands_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+
+        self.command_label = ctk.CTkLabel(self.commands_frame, text="Текстові команди:", anchor="w")
+        self.command_label.pack(padx=10, pady=5, anchor="w")
+
+        self.command_entry = ctk.CTkEntry(
+            self.commands_frame,
+            placeholder_text="Введіть команду...",
+            width=button_width,
+            height=button_height
+        )
+        self.command_entry.pack(padx=10, pady=5, fill="x")
+        
+        # Привязка Enter к выполнению команды
+        self.command_entry.bind("<Return>", self.execute_text_command)
+
+        self.execute_cmd_btn = ctk.CTkButton(
+            self.commands_frame,
+            text="Виконати команду",
+            command=self.execute_text_command,
+            width=button_width,
+            height=button_height
+        )
+        self.execute_cmd_btn.pack(padx=10, pady=5)
+
         self.right_frame = ctk.CTkFrame(self)
         self.right_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
@@ -157,6 +188,279 @@ class RobotApp(ctk.CTk):
         self.add_log(f"Створено {len(self.shelves)} стелажів.")
         self.add_log(f"Створено {len(self.items)} предметів на стелажах.")
         self.add_log(f"Позиція робота: {self.robot_pos}")
+
+    def execute_text_command(self, event=None):
+        """Обработка текстовых команд"""
+        command = self.command_entry.get().strip().lower()
+        
+        if not command:
+            messagebox.showwarning("Помилка", "Введіть команду!")
+            return
+        
+        self.add_log(f"Отримана команда: {command}")
+        
+        # Паттерн для сбора ближайших n товаров
+        pattern_nearest = r"собери\s+найближчi?\s+(\d+)\s+товари"
+        match_nearest = re.search(pattern_nearest, command)
+        
+        if match_nearest:
+            n = int(match_nearest.group(1))
+            self.collect_nearest_items(n)
+            self.command_entry.delete(0, tk.END)
+            return
+        
+        # Паттерн для сбора всех товаров
+        if "собери всi товари" in command or "собери всі товари" in command:
+            self.collect_all_items()
+            self.command_entry.delete(0, tk.END)
+            return
+        
+        # Паттерн для создания txt файла с логами
+        if "создай txt файл с логами" in command or "створи txt файл з логами" in command:
+            self.create_log_file()
+            self.command_entry.delete(0, tk.END)
+            return
+        
+        # Если команда не распознана
+        messagebox.showwarning("Помилка", 
+            "Команда не розпізнана!\n\n"
+            "Доступні команди:\n"
+            "• собери ближайшие N товаров\n"
+            "• собери все товары\n"
+            "• создай txt файл с логами")
+
+    def collect_nearest_items(self, n):
+        """Сбор n ближайших предметов от текущей позиции робота"""
+        if self.held_item:
+            messagebox.showwarning("Помилка", "Робот вже тримає предмет! Спочатку доставте його.")
+            return
+        
+        if not self.items:
+            messagebox.showwarning("Помилка", "Немає предметів для збору!")
+            return
+        
+        if n <= 0:
+            messagebox.showwarning("Помилка", "Кількість товарів повинна бути більше 0!")
+            return
+        
+        # Отключаем кнопки во время выполнения
+        self.select_item_btn.configure(state="disabled")
+        self.execute_cmd_btn.configure(state="disabled")
+        
+        self.add_log(f"Початок збору {n} ближайших товарів...")
+        
+        original_pos = self.robot_pos.copy()
+        collected_count = 0
+        total_time = 0
+        total_distance = 0
+        
+        try:
+            for _ in range(min(n, len(self.items))):
+                if not self.items:
+                    break
+                
+                # Находим ближайший предмет от текущей позиции
+                nearest_item = self.find_nearest_item()
+                if not nearest_item:
+                    break
+                
+                # Собираем предмет
+                collect_time, collect_distance = self.auto_collect_item(nearest_item)
+                if collect_time > 0:
+                    collected_count += 1
+                    total_time += collect_time
+                    total_distance += collect_distance
+                    self.add_log(f"Зібрано {collected_count}/{min(n, len(self.items) + collected_count)} товарів")
+                else:
+                    self.add_log(f"Не вдалося зібрати товар {nearest_item}")
+                    break
+        
+        except Exception as e:
+            self.add_log(f"Помилка при зборі товарів: {str(e)}")
+        
+        finally:
+            # Включаем кнопки обратно
+            self.select_item_btn.configure(state="normal")
+            self.execute_cmd_btn.configure(state="normal")
+        
+        self.add_log(f"Завершено збір товарів. Зібрано: {collected_count}, Час: {total_time:.2f} сек, Відстань: {total_distance} клітин")
+
+    def collect_all_items(self):
+        """Сбор всех предметов на карте"""
+        if self.held_item:
+            messagebox.showwarning("Помилка", "Робот вже тримає предмет! Спочатку доставте його.")
+            return
+        
+        if not self.items:
+            messagebox.showwarning("Помилка", "Немає предметів для збору!")
+            return
+        
+        total_items = len(self.items)
+        self.collect_nearest_items(total_items)
+
+    def find_nearest_item(self):
+        """Находит ближайший НЕдоставленный предмет от текущей позиции робота"""
+        if not self.items:
+            return None
+        
+        nearest_item = None
+        min_distance = float('inf')
+        
+        for item_id, item_data in self.items.items():
+            # Проверяем, что предмет не доставлен
+            if item_data.get("delivered", False):
+                continue
+                
+            item_pos = item_data["pos"]
+            
+            # Ищем доступную позицию рядом с предметом
+            directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+            for dx, dy in directions:
+                adjacent_pos = [item_pos[0] + dx, item_pos[1] + dy]
+                if (0 <= adjacent_pos[0] < self.grid_size and 
+                    0 <= adjacent_pos[1] < self.grid_size and 
+                    adjacent_pos not in self.shelves):
+                    
+                    # Находим путь к этой позиции
+                    path = self.find_path(self.robot_pos, adjacent_pos)
+                    if path and len(path) < min_distance:
+                        min_distance = len(path)
+                        nearest_item = item_id
+                        break
+        
+        return nearest_item
+
+    def auto_collect_item(self, item_id):
+        """Автоматически собирает указанный предмет"""
+        if item_id not in self.items:
+            return 0, 0
+        
+        # Проверяем, что предмет не доставлен
+        if self.items[item_id].get("delivered", False):
+            return 0, 0
+        
+        item_pos = self.items[item_id]["pos"]
+        
+        # Находим доступную позицию рядом с предметом
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        adjacent_pos = None
+        
+        for dx, dy in directions:
+            check_pos = [item_pos[0] + dx, item_pos[1] + dy]
+            if (0 <= check_pos[0] < self.grid_size and 
+                0 <= check_pos[1] < self.grid_size and 
+                check_pos not in self.shelves):
+                adjacent_pos = check_pos
+                break
+        
+        if not adjacent_pos:
+            return 0, 0
+        
+        # Находим путь к предмету
+        path_to_item = self.find_path(self.robot_pos, adjacent_pos)
+        if not path_to_item:
+            return 0, 0
+        
+        start_time = time.time()
+        
+        # Движение к предмету
+        for step in path_to_item[1:]:
+            self.robot_pos = step
+            self.path_cells.append(step.copy())
+            self.draw_grid()
+            self.update()
+            time.sleep(self.animation_speed)
+        
+        # Берем предмет
+        self.held_item = item_id
+        self.add_log(f"Робот взяв предмет {item_id} з позиції {item_pos}")
+        
+        # Находим ближайшую точку доставки
+        best_target = self.find_nearest_delivery_point()
+        if not best_target:
+            return 0, 0
+        
+        # Находим путь к точке доставки
+        path_to_delivery = self.find_path(self.robot_pos, best_target)
+        if not path_to_delivery:
+            return 0, 0
+        
+        # Движение к точке доставки
+        for step in path_to_delivery[1:]:
+            self.robot_pos = step
+            self.path_cells.append(step.copy())
+            self.draw_grid()
+            self.update()
+            time.sleep(self.animation_speed)
+        
+        # Доставляем предмет и помечаем как delivered
+        self.items[self.held_item]["pos"] = self.robot_pos.copy()
+        self.items[self.held_item]["delivered"] = True  # Помечаем как доставленный
+        self.held_item = None
+        
+        end_time = time.time()
+        total_time = end_time - start_time
+        total_distance = len(path_to_item) + len(path_to_delivery) - 2
+        
+        self.add_log(f"Предмет {item_id} доставлен на {self.robot_pos}")
+        self.draw_grid()
+        
+        return total_time, total_distance
+
+    def find_nearest_delivery_point(self):
+        """Находит ближайшую доступную точку доставки"""
+        best_target = None
+        best_distance = float('inf')
+        
+        for target in self.delivery_points:
+            if target in self.shelves:
+                continue
+            
+            # Проверяем, не занята ли позиция
+            position_occupied = False
+            for item_id, item_data in self.items.items():
+                if item_data["pos"] == target and item_id != self.held_item:
+                    position_occupied = True
+                    break
+            
+            if position_occupied:
+                continue
+            
+            path = self.find_path(self.robot_pos, target)
+            if path and len(path) < best_distance:
+                best_distance = len(path)
+                best_target = target
+        
+        return best_target
+
+    def create_log_file(self):
+        """Создает txt файл с логами событий"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"robot_logs_{timestamp}.txt"
+            
+            # Получаем содержимое лога
+            log_content = self.log_text.get("1.0", tk.END)
+            
+            # Записываем в файл
+            with open(filename, 'w', encoding='utf-8') as file:
+                file.write(f"Логи роботи робота на складі\n")
+                file.write(f"Створено: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n")
+                file.write("=" * 50 + "\n\n")
+                file.write(log_content)
+            
+            current_dir = os.getcwd()
+            full_path = os.path.join(current_dir, filename)
+            
+            self.add_log(f"Файл з логами створено: {filename}")
+            self.add_log(f"Шлях до файлу: {full_path}")
+            
+            messagebox.showinfo("Успіх", f"Файл з логами створено:\n{filename}")
+            
+        except Exception as e:
+            error_msg = f"Помилка при створенні файлу: {str(e)}"
+            self.add_log(error_msg)
+            messagebox.showerror("Помилка", error_msg)
 
     def draw_grid(self, event=None):
         self.grid_canvas.delete("all")
